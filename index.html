@@ -1,0 +1,238 @@
+```html
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Akıllı Portföy Terminali</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & Babel CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0a0c10; }
+        .scale-in { animation: scaleIn 0.2s ease-out; }
+        @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // API Configuration
+        const apiKey = ""; // API anahtarınızı buraya yapıştırın
+        const appId = "akilli-portfoy-v1";
+
+        const INITIAL_ASSETS = [
+            { id: '1', name: 'THYAO', quantity: 100, avgPrice: 280.50, date: '2023-10-20', tp: 350, sl: 250 },
+            { id: '2', name: 'BTC', quantity: 0.05, avgPrice: 62000, date: '2023-10-21', tp: 75000, sl: 58000 }
+        ];
+
+        function App() {
+            const [assets, setAssets] = useState(() => {
+                const saved = localStorage.getItem(`${appId}_assets`);
+                return saved ? JSON.parse(saved) : INITIAL_ASSETS;
+            });
+            const [history, setHistory] = useState(() => {
+                const saved = localStorage.getItem(`${appId}_history`);
+                return saved ? JSON.parse(saved) : [];
+            });
+            const [prices, setPrices] = useState({});
+            const [loading, setLoading] = useState(false);
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [modalType, setModalType] = useState(null);
+            const [selectedItem, setSelectedItem] = useState(null);
+            const [formData, setFormData] = useState({ 
+                name: '', quantity: '', avgPrice: '', tp: '', sl: '', sellPrice: '', 
+                date: new Date().toISOString().split('T')[0] 
+            });
+
+            useEffect(() => localStorage.setItem(`${appId}_assets`, JSON.stringify(assets)), [assets]);
+            useEffect(() => localStorage.setItem(`${appId}_history`, JSON.stringify(history)), [history]);
+
+            const fetchPrices = async () => {
+                if (assets.length === 0) return;
+                setLoading(true);
+                const symbols = assets.map(a => (a.name.length <= 5 ? `${a.name}.IS` : a.name)).join(", ");
+                const query = `Get current prices for: ${symbols}. Return ONLY JSON: {"SYMBOL": price}`;
+
+                try {
+                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: query }] }] })
+                    });
+                    const data = await res.json();
+                    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                    const jsonMatch = text?.match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        const parsed = JSON.parse(jsonMatch[0]);
+                        const mapped = {};
+                        Object.keys(parsed).forEach(k => mapped[k.split('.')[0].toUpperCase()] = parseFloat(parsed[k]));
+                        setPrices(prev => ({ ...prev, ...mapped }));
+                    }
+                } catch (e) { console.error(e); } finally { setLoading(false); }
+            };
+
+            useEffect(() => { fetchPrices(); }, []);
+
+            const stats = useMemo(() => {
+                let totalCost = 0, currentVal = 0;
+                assets.forEach(a => {
+                    const price = prices[a.name.toUpperCase()] || a.avgPrice;
+                    totalCost += a.quantity * a.avgPrice;
+                    currentVal += a.quantity * price;
+                });
+                const realized = history.reduce((sum, h) => sum + h.profit, 0);
+                return { currentVal, activeProfit: currentVal - totalCost, realized, totalCost };
+            }, [assets, prices, history]);
+
+            const handleSave = () => {
+                const data = { ...formData, name: formData.name.toUpperCase(), quantity: parseFloat(formData.quantity), avgPrice: parseFloat(formData.avgPrice), tp: parseFloat(formData.tp) || null, sl: parseFloat(formData.sl) || null };
+                if (modalType === 'edit') setAssets(assets.map(a => a.id === selectedItem.id ? { ...data, id: a.id } : a));
+                else setAssets([...assets, { ...data, id: Date.now().toString() }]);
+                closeModal();
+            };
+
+            const closeModal = () => { setModalType(null); setSelectedItem(null); setFormData({ name: '', quantity: '', avgPrice: '', tp: '', sl: '', sellPrice: '', date: new Date().toISOString().split('T')[0] }); };
+
+            const openModal = (type, item = null) => {
+                if (item) {
+                    setSelectedItem(item);
+                    setFormData({ ...item, sellPrice: prices[item.name.toUpperCase()] || item.avgPrice });
+                }
+                setModalType(type);
+            };
+
+            return (
+                <div className="min-h-screen text-slate-200 pb-24 md:pb-0 md:pt-20">
+                    {/* Alt Navigasyon (Mobil Dostu) */}
+                    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-4 py-3 md:top-0 md:bottom-auto md:border-b md:border-t-0">
+                        <div className="max-w-5xl mx-auto flex justify-between items-center">
+                            <div className="flex gap-4 flex-1 justify-around md:justify-start">
+                                <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center gap-1 ${activeTab === 'dashboard' ? 'text-indigo-400' : 'text-slate-500'}`}>
+                                    <i data-lucide="layout-dashboard" className="w-6 h-6"></i>
+                                    <span className="text-[10px] font-bold">Panel</span>
+                                </button>
+                                <button onClick={() => setActiveTab('assets')} className={`flex flex-col items-center gap-1 ${activeTab === 'assets' ? 'text-indigo-400' : 'text-slate-500'}`}>
+                                    <i data-lucide="wallet" className="w-6 h-6"></i>
+                                    <span className="text-[10px] font-bold">Varlıklar</span>
+                                </button>
+                                <button onClick={() => setActiveTab('history')} className={`flex flex-col items-center gap-1 ${activeTab === 'history' ? 'text-indigo-400' : 'text-slate-500'}`}>
+                                    <i data-lucide="history" className="w-6 h-6"></i>
+                                    <span className="text-[10px] font-bold">Geçmiş</span>
+                                </button>
+                            </div>
+                            <button onClick={() => openModal('add')} className="bg-emerald-600 p-3 rounded-2xl shadow-lg shadow-emerald-900/20 active:scale-90 transition-transform">
+                                <i data-lucide="plus" className="w-6 h-6 text-white"></i>
+                            </button>
+                        </div>
+                    </nav>
+
+                    <main className="max-w-5xl mx-auto px-6 py-8">
+                        <header className="flex justify-between items-center mb-8">
+                            <h1 className="text-2xl font-bold tracking-tight">Portföyüm</h1>
+                            <button onClick={fetchPrices} className="text-indigo-400 text-sm flex items-center gap-2">
+                                <i data-lucide="refresh-cw" className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`}></i>
+                                {loading ? 'Güncelleniyor' : 'Yenile'}
+                            </button>
+                        </header>
+
+                        {activeTab === 'dashboard' && (
+                            <div className="space-y-6">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="bg-slate-900/50 border border-slate-800 p-5 rounded-3xl">
+                                        <p className="text-slate-500 text-[10px] font-bold uppercase">Toplam Değer</p>
+                                        <h3 className="text-lg font-bold">{stats.currentVal.toLocaleString('tr-TR')} ₺</h3>
+                                    </div>
+                                    <div className="bg-slate-900/50 border border-slate-800 p-5 rounded-3xl">
+                                        <p className="text-slate-500 text-[10px] font-bold uppercase">Anlık K/Z</p>
+                                        <h3 className={`text-lg font-bold ${stats.activeProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                            {stats.activeProfit.toLocaleString('tr-TR')} ₺
+                                        </h3>
+                                    </div>
+                                </div>
+                                
+                                <div className="bg-slate-900/50 border border-slate-800 p-6 rounded-3xl">
+                                    <h4 className="text-sm font-bold mb-4 flex items-center gap-2">
+                                        <i data-lucide="alert-triangle" className="w-4 h-4 text-amber-500"></i> Alarmlar
+                                    </h4>
+                                    {assets.filter(a => prices[a.name] && ((a.tp && prices[a.name] >= a.tp) || (a.sl && prices[a.name] <= a.sl))).map(a => (
+                                        <div key={a.id} className="flex justify-between items-center p-3 bg-slate-800/50 rounded-2xl mb-2">
+                                            <span className="font-bold text-sm">{a.name}</span>
+                                            <button onClick={() => openModal('sell', a)} className="bg-indigo-600 px-3 py-1 rounded-lg text-xs font-bold">SAT</button>
+                                        </div>
+                                    ))}
+                                    {assets.length === 0 && <p className="text-center text-slate-600 text-sm py-4">Henüz alarm yok.</p>}
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'assets' && (
+                            <div className="space-y-4">
+                                {assets.map(a => {
+                                    const cur = prices[a.name.toUpperCase()] || a.avgPrice;
+                                    const pnl = (cur - a.avgPrice) * a.quantity;
+                                    return (
+                                        <div key={a.id} className="bg-slate-900/50 border border-slate-800 p-4 rounded-3xl flex justify-between items-center">
+                                            <div>
+                                                <p className="font-bold">{a.name}</p>
+                                                <p className="text-[10px] text-slate-500">{a.quantity} Adet @ {a.avgPrice} ₺</p>
+                                            </div>
+                                            <div className="text-right flex items-center gap-4">
+                                                <div>
+                                                    <p className="font-bold">{cur} ₺</p>
+                                                    <p className={`text-[10px] font-bold ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{pnl.toLocaleString('tr-TR')} ₺</p>
+                                                </div>
+                                                <button onClick={() => openModal('edit', a)} className="text-slate-500"><i data-lucide="pencil" className="w-4 h-4"></i></button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </main>
+
+                    {/* MODAL */}
+                    {modalType && (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/90 backdrop-blur-sm">
+                            <div className="bg-slate-900 border border-slate-800 w-full max-w-sm rounded-[2rem] p-6 scale-in">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h2 className="font-bold text-lg">{modalType === 'add' ? 'Yeni Ekle' : 'Düzenle'}</h2>
+                                    <button onClick={closeModal}><i data-lucide="x" className="w-6 h-6 text-slate-500"></i></button>
+                                </div>
+                                <div className="space-y-4">
+                                    <input placeholder="Sembol (THYAO)" className="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value.toUpperCase()})} />
+                                    <div className="flex gap-2">
+                                        <input placeholder="Adet" type="number" className="w-1/2 bg-slate-950 border border-slate-800 p-4 rounded-2xl outline-none" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} />
+                                        <input placeholder="Fiyat" type="number" className="w-1/2 bg-slate-950 border border-slate-800 p-4 rounded-2xl outline-none" value={formData.avgPrice} onChange={e => setFormData({...formData, avgPrice: e.target.value})} />
+                                    </div>
+                                    <button onClick={handleSave} className="w-full bg-indigo-600 py-4 rounded-2xl font-bold mt-4">Kaydet</button>
+                                    {modalType === 'edit' && (
+                                        <button onClick={() => { setAssets(assets.filter(x => x.id !== selectedItem.id)); closeModal(); }} className="w-full text-rose-500 text-sm font-bold">Varlığı Sil</button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+
+        // Lucide ikonlarını yükle
+        setTimeout(() => { lucide.createIcons(); }, 100);
+    </script>
+</body>
+</html>
+
+```
